@@ -6,6 +6,7 @@ from os import getenv
 
 app = Flask(__name__)
 
+app.config['SECRET_KEY'] = getenv('SECRET_KEY', config('SECRET_KEY'))
 app.config['MYSQL_HOST'] = getenv('DB_HOST', config('DB_HOST'))
 app.config['MYSQL_USER'] = getenv('DB_USER', config('DB_USER'))
 app.config['MYSQL_PASSWORD'] = getenv('DB_PASSWORD', config('DB_PASSWORD'))
@@ -27,10 +28,9 @@ class User(Resource):
         sql = '''SELECT * FROM users WHERE id = %s'''
         cur.execute(sql, (user_id,))
         row = cur.fetchone()
+
         if row is not None:
-            name = row[0][1]
-            admin = row[0][3]
-            result = {'user': name, 'admin': admin}
+            result = {'user': row[1], 'admin': row[3]}
         else:
             result = {'Error': 'No user with that id'}
         cur.close()
@@ -52,7 +52,7 @@ class User(Resource):
             if cur.rowcount:
                 result = {"Success": "Updated user with id {}.".format(user_id)}
             else:
-                result = {"Error": "Coulnd find or could delete user with id {}.".format(user_id)}
+                result = {"Error": "Couldn't find or couldn't delete user with id {}.".format(user_id)}
         else:
             result = {'Error': "Not enough parameters to create a user"}
         return result
@@ -66,7 +66,7 @@ class User(Resource):
         if cur.rowcount:
             return {"Success": "Deleted user with id {}.".format(user_id)}
         else:
-            return {"Error": "Coulnd find or could delete user with id {}.".format(user_id)}
+            return {"Error": "Couldn't find or couldn't delete user with id {}.".format(user_id)}
 
 
 class Users(Resource):
