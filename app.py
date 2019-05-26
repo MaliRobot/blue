@@ -3,8 +3,7 @@ from flask_restful import Resource, Api, reqparse
 from decouple import config
 from flask_mysqldb import MySQL
 from flask_jwt_extended import (
-    JWTManager, jwt_required, create_access_token,
-    get_jwt_identity
+    JWTManager, jwt_required, create_access_token, get_jwt_identity
 )
 from os import getenv
 
@@ -38,7 +37,7 @@ class User(Resource):
         cur.close()
 
         if row is not None:
-            return jsonify({'username': row[1], 'admin': row[3], 'email': row[4]}), 200
+            return jsonify({'username': row[1], 'admin': row[3], 'email': row[4]})
         else:
             return jsonify({'Error': 'No user with that id'}), 404
 
@@ -77,12 +76,28 @@ class User(Resource):
 
 
 class Users(Resource):
-    @jwt_required
     def get(self):
-        current_user = get_jwt_identity()
-        print(current_user)
+        if request.args.get('username'):
+            return self.getByUsername(request.args.get('username'))
+        elif request.args.get('email'):
+            return self.getByUsername(request.args.get('email'))
+
+        if request.args.get('limit'):
+            pass
+        if request.args.get('sort'):
+            pass
+
         cur = mysql.connection.cursor()
-        cur.execute('''SELECT * FROM users''')
+        sql = '''SELECT * FROM users'''
+        if request.args.get('admins'):
+            sql += ''' WHERE admin = True'''
+        if request.args.get('limit'):
+            print(request.args.get('limit'))
+            sql += ''' LIMIT ''' + request.args.get('limit')
+        if request.args.get('sort'):
+            sql += ''' SORT BY ''' + request.args.get('sort')
+
+        cur.execute(sql)
         rows = cur.fetchall()
         cur.close()
         if rows is not None:
@@ -93,11 +108,35 @@ class Users(Resource):
         else:
             return jsonify({'err': 'There are no users'}), 404
 
+    @staticmethod
+    def get_by_username(username):
+        cur = mysql.connection.cursor()
+        sql = '''SELECT * FROM users WHERE username = %s'''
+        cur.execute(sql, (username,))
+        row = cur.fetchone()
+        cur.close()
+        if row is not None:
+            return jsonify({'username': row[1], 'admin': row[3], 'email': row[4]})
+        else:
+            return jsonify({'Error': 'No user with that id'}), 404
+
+    @staticmethod
+    def get_by_email(email):
+        cur = mysql.connection.cursor()
+        sql = '''SELECT * FROM users WHERE email = %s'''
+        cur.execute(sql, (email,))
+        row = cur.fetchone()
+        cur.close()
+        if row is not None:
+            return jsonify({'username': row[1], 'admin': row[3], 'email': row[4]})
+        else:
+            return jsonify({'Error': 'No user with that id'}), 404
+
     @jwt_required
     def post(self):
         args = parser.parse_args()
-        if 'name' in args and 'password' in args and 'email' in args:
-            admin = False
+        if 'username' in args and 'password' in args and 'email' in args:
+            admin = 0
             if 'admin' in args:
                 admin = args['admin']
             cur = mysql.connection.cursor()
@@ -105,10 +144,13 @@ class Users(Resource):
             cur.execute(sql, (args['username'], args['password'], admin, args['email'],))
             mysql.connection.commit()
             cur.close()
-            result = jsonify({'msg': 'User inserted'}), 201
+            response = jsonify({'msg': 'User inserted'})
+            response.status_code = 201
+            return response
         else:
-            result = jsonify({'err': "Not enough parameters to create a user"}), 400
-        return result
+            response = jsonify({'err': "Not enough parameters to create a user"})
+            response.status_code = 400
+            return response
 
 
 @app.route('/login', methods=['POST'])
