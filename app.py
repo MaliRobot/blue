@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session
 from flask_restful import Resource, Api, reqparse
 from decouple import config
 from flask_mysqldb import MySQL
@@ -6,10 +6,13 @@ from flask_jwt_extended import (
     JWTManager, jwt_required, create_access_token, get_jwt_identity
 )
 from os import getenv
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 
 api = Api(app)
+
+app.config['PROPAGATE_EXCEPTIONS'] = True
 
 app.config['MYSQL_HOST'] = getenv('DB_HOST', config('DB_HOST'))
 app.config['MYSQL_USER'] = getenv('DB_USER', config('DB_USER'))
@@ -34,15 +37,21 @@ class User(Resource):
         sql = '''SELECT * FROM users WHERE id = %s'''
         cur.execute(sql, (user_id,))
         row = cur.fetchone()
-        cur.close()
 
         if row is not None:
             return jsonify({'username': row[1], 'admin': row[3], 'email': row[4]})
         else:
-            return jsonify({'Error': 'No user with that id'}), 404
+            response = jsonify({'Error': 'No user with that id'})
+            response.status_code = 404
+            return
 
     @jwt_required
     def put(self, user_id):
+        if session.get('admin') == 0 and user_id != session.get('id'):
+            response = jsonify({'err': 'Only admin can create new users'})
+            response.code = 403
+            return response
+
         args = parser.parse_args()
         if 'password' in args and 'email' in args:
             cur = mysql.connection.cursor()
@@ -64,6 +73,12 @@ class User(Resource):
 
     @jwt_required
     def delete(self, user_id):
+        #only admin should be able to delete user
+        if session.get('admin') == 0:
+            response = jsonify({'err': 'Only admin can create new users'})
+            response.code = 403
+            return response
+
         cur = mysql.connection.cursor()
         sql = '''DELETE FROM users WHERE id = %s'''
         cur.execute(sql, (user_id,))
@@ -82,11 +97,6 @@ class Users(Resource):
         elif request.args.get('email'):
             return self.getByUsername(request.args.get('email'))
 
-        if request.args.get('limit'):
-            pass
-        if request.args.get('sort'):
-            pass
-
         cur = mysql.connection.cursor()
         sql = '''SELECT * FROM users'''
         if request.args.get('admins'):
@@ -95,7 +105,7 @@ class Users(Resource):
             print(request.args.get('limit'))
             sql += ''' LIMIT ''' + request.args.get('limit')
         if request.args.get('sort'):
-            sql += ''' SORT BY ''' + request.args.get('sort')
+            sql += ''' ORDER BY ''' + request.args.get('sort')
 
         cur.execute(sql)
         rows = cur.fetchall()
@@ -134,6 +144,12 @@ class Users(Resource):
 
     @jwt_required
     def post(self):
+        # only admin should be able to create new users
+        if session.get('admin') == 0:
+            response = jsonify({'err': 'Only admin can create new users'})
+            response.code = 403
+            return response
+
         args = parser.parse_args()
         if 'username' in args and 'password' in args and 'email' in args:
             admin = 0
@@ -141,7 +157,7 @@ class Users(Resource):
                 admin = args['admin']
             cur = mysql.connection.cursor()
             sql = '''INSERT INTO users (username, password, admin, email) VALUES (%s, %s, %s, %s)'''
-            cur.execute(sql, (args['username'], args['password'], admin, args['email'],))
+            cur.execute(sql, (args['username'], generate_password_hash(args['password']), admin, args['email'],))
             mysql.connection.commit()
             cur.close()
             response = jsonify({'msg': 'User inserted'})
@@ -152,6 +168,13 @@ class Users(Resource):
             response.status_code = 400
             return response
 
+@jwt.expired_token_loader
+def my_expired_token_callback():
+    return jsonify({
+        'status': 401,
+        'sub_status': 42,
+        'msg': 'The token has expired'
+    }), 401
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -164,16 +187,18 @@ def login():
         return jsonify({"err": "You must provide user and password parameters"}), 400
     username = args['username']
     password = args['password']
-
+    print(generate_password_hash(password))
     cur = mysql.connection.cursor()
-    sql = '''SELECT password FROM users WHERE username = %s'''
+    sql = '''SELECT id, password, admin FROM users WHERE username = %s'''
     cur.execute(sql, (username,))
     row = cur.fetchone()
     mysql.connection.commit()
     cur.close()
 
     if row:
-        if row[0] == password:
+        if check_password_hash(row[1], password):
+            session['user_id'] = row[0]
+            session['admin'] = row[2]
             access_token = create_access_token(identity=username)
             return jsonify(access_token=access_token), 200
         return jsonify({"err": "Wrong password."}), 401
