@@ -48,34 +48,42 @@ class User(Resource):
     @jwt_required
     def put(self, user_id):
         if session.get('admin') == 0 and user_id != session.get('id'):
-            response = jsonify({'err': 'Only admin can create new users'})
+            response = jsonify({'err': 'Only admin can edit users'})
             response.code = 403
             return response
 
         args = parser.parse_args()
-        if 'password' in args and 'email' in args:
+        if args['password'] is not None and args['email'] is not None:
             cur = mysql.connection.cursor()
-            if 'admin' in args:
+            password = generate_password_hash(args['password'])
+            if args['admin'] is not None:
                 admin = args['admin']
-                sql = '''UPDATE users set password = %s, admin = %s, email = %s WHERE id %s'''
-                cur.execute(sql, (args['password'], admin, args['email'], user_id))
+                sql = '''UPDATE users set password = %s, admin = %s, email = %s WHERE id = %s'''
+                cur.execute(sql, (password, admin, args['email'], user_id))
             else:
-                sql = '''UPDATE users set password = %s WHERE id %s'''
-                cur.execute(sql, (args['password'], args['email'], user_id))
+                sql = '''UPDATE users set password = %s WHERE id = %s'''
+                cur.execute(sql, (password, args['email'], user_id))
             mysql.connection.commit()
             cur.close()
+
             if cur.rowcount:
-                return jsonify({"Success": "Updated user with id {}.".format(user_id)}), 200
+                response = jsonify({"Success": "Updated user with id {}.".format(user_id)})
+                response.status_code = 200
+                return response
             else:
-                return({"Error": "Couldn't find or couldn't delete user with id {}.".format(user_id)}), 400
+                response = jsonify({"Error": "Couldn't find user with id {} or nothing to update.".format(user_id)})
+                response.status_code = 400
+                return response
         else:
-            return jsonify({'Error': "Not enough parameters to create a user"}), 400
+            response = jsonify({'Error': "Not enough parameters to change a user"})
+            response.status_code = 400
+            return response
 
     @jwt_required
     def delete(self, user_id):
         #only admin should be able to delete user
         if session.get('admin') == 0:
-            response = jsonify({'err': 'Only admin can create new users'})
+            response = jsonify({'err': 'Only admin can delete users'})
             response.code = 403
             return response
 
@@ -85,9 +93,13 @@ class User(Resource):
         mysql.connection.commit()
         cur.close()
         if cur.rowcount:
-            return jsonify({"msg": "Deleted user with id {}.".format(user_id)}), 204
+            response = jsonify({"msg": "Deleted user with id {}.".format(user_id)})
+            response.status_code = 204
+            return response
         else:
-            return jsonify({"err": "Couldn't find or couldn't delete user with id {}.".format(user_id)}), 404
+            response = jsonify({"err": "Couldn't find or couldn't delete user with id {}.".format(user_id)})
+            response.status_code = 404
+            return response
 
 
 class Users(Resource):
@@ -145,7 +157,7 @@ class Users(Resource):
     @jwt_required
     def post(self):
         # only admin should be able to create new users
-        if session.get('admin') == 0:
+        if session['admin'] == 0:
             response = jsonify({'err': 'Only admin can create new users'})
             response.code = 403
             return response
@@ -168,6 +180,7 @@ class Users(Resource):
             response.status_code = 400
             return response
 
+
 @jwt.expired_token_loader
 def my_expired_token_callback():
     return jsonify({
@@ -176,18 +189,16 @@ def my_expired_token_callback():
         'msg': 'The token has expired'
     }), 401
 
+
 @app.route('/login', methods=['POST'])
 def login():
-    current_user = get_jwt_identity()
-    print(current_user)
-
     args = parser.parse_args()
 
     if 'username' not in args or 'password' not in args:
         return jsonify({"err": "You must provide user and password parameters"}), 400
     username = args['username']
     password = args['password']
-    print(generate_password_hash(password))
+
     cur = mysql.connection.cursor()
     sql = '''SELECT id, password, admin FROM users WHERE username = %s'''
     cur.execute(sql, (username,))
