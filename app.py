@@ -3,7 +3,7 @@ from flask_restful import Resource, Api, reqparse
 from decouple import config
 from flask_mysqldb import MySQL
 from flask_jwt_extended import (
-    JWTManager, jwt_required, create_access_token, get_jwt_identity
+    JWTManager, jwt_required, create_access_token
 )
 from os import getenv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -31,7 +31,11 @@ parser.add_argument('admin', type=bool)
 parser.add_argument('email', type=str)
 
 
+"""
+Perform GET, PUT, DELETE on a single user
+"""
 class User(Resource):
+    # get single user - no authentication required
     def get(self, user_id):
         cur = mysql.connection.cursor()
         sql = '''SELECT * FROM users WHERE id = %s'''
@@ -39,43 +43,53 @@ class User(Resource):
         row = cur.fetchone()
 
         if row is not None:
-            return jsonify({'username': row[1], 'admin': row[3], 'email': row[4]})
+            response = jsonify({'username': row[1], 'admin': row[3], 'email': row[4]})
+            response.status_code = 200
+            return response
         else:
-            response = jsonify({'Error': 'No user with that id'})
+            response = jsonify({'err': 'No user with that id'})
             response.status_code = 404
             return
 
+    # change user, admin priviledges required except if non-admin user changes it's own user
     @jwt_required
     def put(self, user_id):
-        if session.get('admin') == 0 and user_id != session.get('id'):
+        print(session.get('user_id'))
+        # check if user is admin or if user id and current user's id are the same
+        can_edit = False
+        if session.get('admin') == 0 and user_id != session.get('user_id'):
+            can_edit = True
             response = jsonify({'err': 'Only admin can edit users'})
             response.code = 403
             return response
 
+        # check args and update user accordingly
         args = parser.parse_args()
         if args['password'] is not None and args['email'] is not None:
             cur = mysql.connection.cursor()
             password = generate_password_hash(args['password'])
-            if args['admin'] is not None:
+            if args['admin'] is not None and can_edit:
                 admin = args['admin']
-                sql = '''UPDATE users set password = %s, admin = %s, email = %s WHERE id = %s'''
-                cur.execute(sql, (password, admin, args['email'], user_id))
+                sql = '''UPDATE users set password = '{}', admin = {}, email = '{}' WHERE id = {}'''\
+                    .format(password, admin, args['email'], user_id)
+                cur.execute(sql)
             else:
-                sql = '''UPDATE users set password = %s WHERE id = %s'''
-                cur.execute(sql, (password, args['email'], user_id))
+                sql = '''UPDATE users set password = '{}', email = '{}' WHERE id = {}'''\
+                    .format(password, args['email'], user_id)
+                cur.execute(sql)
             mysql.connection.commit()
             cur.close()
 
             if cur.rowcount:
-                response = jsonify({"Success": "Updated user with id {}.".format(user_id)})
+                response = jsonify({"msg": "Updated user with id {}.".format(user_id)})
                 response.status_code = 200
                 return response
             else:
-                response = jsonify({"Error": "Couldn't find user with id {} or nothing to update.".format(user_id)})
+                response = jsonify({"err": "Couldn't find user with id {} or nothing to update.".format(user_id)})
                 response.status_code = 400
                 return response
         else:
-            response = jsonify({'Error': "Not enough parameters to change a user"})
+            response = jsonify({'err': "Not enough parameters to change a user"})
             response.status_code = 400
             return response
 
@@ -103,21 +117,30 @@ class User(Resource):
 
 
 class Users(Resource):
+    # get on or more users by various parameters
     def get(self):
+        # username and email are unique fields so it makes sense to search them separately
         if request.args.get('username'):
-            return self.getByUsername(request.args.get('username'))
+            return self.get_by_username(request.args.get('username'))
         elif request.args.get('email'):
-            return self.getByUsername(request.args.get('email'))
+            return self.get_by_email(request.args.get('email'))
+
+        # we use this value later to know hot to compile sql query
+        num_values = len([x for x in request.args.to_dict().values() if x != None])
 
         cur = mysql.connection.cursor()
-        sql = '''SELECT * FROM users'''
+        sql = '''SELECT * FROM users WHERE'''
+        if request.args.get('id'):
+            if num_values > 1:
+                sql += ''' id > {} AND'''.format(request.args.get('id'))
+            else:
+                sql += ''' id > {}'''.format(request.args.get('id'))
         if request.args.get('admins'):
-            sql += ''' WHERE admin = True'''
-        if request.args.get('limit'):
-            print(request.args.get('limit'))
-            sql += ''' LIMIT ''' + request.args.get('limit')
+            sql += ''' admin = True'''
         if request.args.get('sort'):
-            sql += ''' ORDER BY ''' + request.args.get('sort')
+            sql += ''' ORDER BY '''.format(request.args.get('sort'))
+        if request.args.get('limit'):
+            sql += ''' LIMIT '''.format(request.args.get('limit'))
 
         cur.execute(sql)
         rows = cur.fetchall()
@@ -138,9 +161,13 @@ class Users(Resource):
         row = cur.fetchone()
         cur.close()
         if row is not None:
-            return jsonify({'username': row[1], 'admin': row[3], 'email': row[4]})
+            response = jsonify({'username': row[1], 'admin': row[3], 'email': row[4]})
+            response.status_code = 200
+            return response
         else:
-            return jsonify({'Error': 'No user with that id'}), 404
+            response = jsonify({'err': 'No user with that id'})
+            response.code = 404
+            return response
 
     @staticmethod
     def get_by_email(email):
@@ -152,7 +179,7 @@ class Users(Resource):
         if row is not None:
             return jsonify({'username': row[1], 'admin': row[3], 'email': row[4]})
         else:
-            return jsonify({'Error': 'No user with that id'}), 404
+            return jsonify({'err': 'No user with that id'}), 404
 
     @jwt_required
     def post(self):
@@ -190,6 +217,9 @@ def my_expired_token_callback():
     }), 401
 
 
+"""
+Authentication using JWT
+"""
 @app.route('/login', methods=['POST'])
 def login():
     args = parser.parse_args()
@@ -208,6 +238,7 @@ def login():
 
     if row:
         if check_password_hash(row[1], password):
+            # save user data to session we will need it for verification
             session['user_id'] = row[0]
             session['admin'] = row[2]
             access_token = create_access_token(identity=username)
